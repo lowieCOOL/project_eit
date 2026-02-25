@@ -1,1 +1,3 @@
 pyserial
+matplotlib
+pygame>=2.6.1
