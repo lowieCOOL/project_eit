@@ -4,6 +4,7 @@ import re
 import numpy as np
 import time
 import keyboard
+import scipy
 
 ser = serial.Serial(port='COM7', baudrate=9600, timeout=0.5)
 if (ser.is_open):
@@ -22,7 +23,7 @@ if (ser.is_open):
     line_avg, = ax1.plot([], [], label=None, color='red', linewidth=2) #f'Running Avg ({window_size_average})'
     line_peak, = ax1.plot([], [], label=None, color='green', linewidth=2) #f'Peak ({window_size_peak})'
     line_threshold, = ax1.plot([], [], label=None, color='orange', linewidth=2) #f'Threshold'
-    line_BPM, = ax2.plot([], [], label=f'BPM ({window_size_peak})', color='blue', linewidth=2)
+    #line_BPM, = ax2.plot([], [], label=f'BPM ({window_size_peak})', color='blue', linewidth=2)
     beat_scatter = ax1.scatter([], [], color='red', zorder=5, label=None, s=30) #'Beat Detected'
 
     ax1.set_title("Real-time Hartslag Monitoring")
@@ -39,6 +40,7 @@ if (ser.is_open):
     ax2.legend()
     ax2.grid(True)
 
+    time_data = []
     y_data = []
     avg_data = []
     peak_data = []
@@ -64,6 +66,7 @@ if (ser.is_open):
         match = pattern_hartslag.search(line_str)
         if match:
             val = int(match.group(1))
+            time_data.append(time.time())
             y_data.append(val)
             
             # Calculate running average
@@ -82,47 +85,18 @@ if (ser.is_open):
             threshold = (current_peak-current_avg) * detection_factor + current_avg
             threshold_data.append(threshold)
 
-            time_since_last_peak = time.time() - last_peak_time
-            if val > threshold:
-                if waiting_above_threshold or y_data[-1] - y_data[-2] < 0: # Check for leading edge
-                    on_leading_edge = True
-                else:
-                    if on_leading_edge:
-                        if time_since_last_peak < 2.5: # Minimum time between peaks
-                            last_beats.append(time_since_last_peak)
-                            if len(last_beats) > 5: # Keep only the last 5 beats
-                                last_beats.pop(0)
-                        waiting_above_threshold = True
-                        last_peak_time = time.time()
-                        on_leading_edge = False
-                        beat_indices.append(len(y_data) - 1)
-                        beat_values.append(val)
-            else:
-                waiting_above_threshold = False
-                if time_since_last_peak > 2.5: # Reset if too much time has passed without a new peak
-                    last_beats = []
-                # else:
-                #     if on_leading_edge: # Only count as a beat if we were on a leading edge
-                #         last_beats.append(time_since_last_peak)
-                #         if len(last_beats) > 5: # Keep only the last 5 beats
-                #             last_beats.pop(0)
-                #         last_peak_time = time.time()
-                #         beat_indices.append(len(y_data) - 1)
-                #         beat_values.append(val)
-                #         on_leading_edge = False
-            if len(last_beats) > 0:
-                BPM = 60 / np.mean(last_beats) if last_beats else 0
-                BPM_data.append(BPM)
-                print(f"Current BPM: {BPM:.2f}")
-            else:
-                BPM_data.append(0)
+            if len(y_data) > 10:
+                peaks, _ = scipy.signal.find_peaks(y_data, height=threshold, distance=15)
+                if len(peaks) > 0:
+                    beat_indices.extend(peaks)
+                    beat_values.extend([y_data[i] for i in peaks])
 
             # Update plot data for both lines
             x_axis = range(len(y_data))
             line_raw.set_data(x_axis, y_data)
             line_avg.set_data(x_axis, avg_data)
             line_peak.set_data(x_axis, peak_data)
-            line_BPM.set_data(x_axis, BPM_data)
+            #line_BPM.set_data(x_axis, BPM_data)
             line_threshold.set_data(x_axis, threshold_data)
             beat_scatter.set_offsets(np.c_[beat_indices, beat_values] if beat_indices else np.empty((0, 2)))
             
