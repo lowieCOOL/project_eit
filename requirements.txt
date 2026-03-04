@@ -1,3 +1,5 @@
 pyserial
 matplotlib
-pygame>=2.6.1
+pygame-ce
+keyboard
+scipy
