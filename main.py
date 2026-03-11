@@ -1,15 +1,11 @@
-# Author: Atanu Sarkar
-# Space Invaders (my version)
-# v1.1.4
-# 11-April-2020, 03:04 AM (IST)
+# Authors: Mats Deherdt, Miró Raeymaekers, Lowie Van Gorp, Luca Verbeeck
+# Space Invaders voor ICT project pingpongbalbuis
 
 import pygame
 import random
 import math
 from pygame import mixer
 import time
-
-# import sched
 
 # game constants
 WIDTH = 800
@@ -171,24 +167,19 @@ def scoreboard():
 
     # render font and text sprites
     score_sprint = font.render("SCORE : " + str(score), True, (255, 255, 255))
-    highest_score_sprint = font.render("HI-SCORE : " + str(highest_score), True, (255, 255, 255))
     level_sprint = font.render("LEVEL : " + str(level), True, (255, 255, 255))
     difficulty_sprint = font.render("DIFFICULTY : " + str(difficulty), True, (255, 255, 255))
-    life_sprint = font.render("LIFE LEFT : " + str(life) + " | " + ("@ " * life), True, (255, 255, 255))
+    life_sprint = font.render("LIFE LEFT : " + str(life), True, (255, 255, 255))
 
     # performance info
     fps_sprint = font.render("FPS : " + str(fps), True, (255, 255, 255))
-    frame_time_in_ms = round(single_frame_rendering_time * 1000, 2)
-    frame_time_sprint = font.render("FT : " + str(frame_time_in_ms) + " ms", True, (255, 255, 255))
 
     # place the font sprites on the screen
     window.blit(score_sprint, (x_offset, y_offset))
-    window.blit(highest_score_sprint, (x_offset, y_offset + 20))
-    window.blit(level_sprint, (x_offset, y_offset + 40))
-    window.blit(difficulty_sprint, (x_offset, y_offset + 60))
+    window.blit(level_sprint, (x_offset, y_offset + 20))
+    window.blit(difficulty_sprint, (x_offset, y_offset + 40))
     window.blit(life_sprint, (x_offset, y_offset + 80))
     window.blit(fps_sprint, (WIDTH - 80, y_offset))
-    window.blit(frame_time_sprint, (WIDTH - 80, y_offset + 20))
 
 
 def collision_check(object1, object2):
@@ -198,7 +189,6 @@ def collision_check(object1, object2):
     y2_cm = object2.y + object2.width / 2
     distance = math.sqrt(math.pow((x2_cm - x1_cm), 2) + math.pow((y2_cm - y1_cm), 2))
     return distance < ((object1.width + object2.width) / 2)
-
 
 # def collision_check(object1_x, object1_y, object1_diameter, object2_x, object2_y, object2_diameter):
 #     x1_cm = object1_x + object1_diameter / 2
@@ -218,18 +208,7 @@ def level_up():
     level += 1
     life += 1       # grant a life
     difficulty = 1  # reset difficulty
-    # TODO: change player and bullet speeds, enemy laser speed and firing probability wrt level
-    #  come up with interesting gameplay ideas.
-    #  variables in hand:
-    #  1. speed of weapons
-    #  2. enemy (up to 6) & player velocity
-    #  3. laser firing probability
-    #  future ideas:
-    #  1. add new type of enemies
-    #  2. add new player spaceship and bullets!
-    #  future features:
-    #  1. create player profile ad store highest score to DB
-    #  2. multiplayer
+
     if level % 3 == 0:
         player.dx += 1
         bullet.dy += 1
@@ -339,21 +318,6 @@ def destroy_weapons(player_obj, bullet_obj, enemy_obj, laser_obj):
     bullet_obj.y = player_obj.y + bullet_obj.height / 2
     laser_obj.x = enemy_obj.x + enemy_obj.width / 2 - laser_obj.width / 2
     laser_obj.y = enemy_obj.y + laser_obj.height / 2
-
-
-# timer = sched.scheduler(time.time, time.sleep)
-#
-#
-# def calculate_fps(sc):
-#     global frame_count
-#     fps = frame_count
-#     print("FPS =", fps)
-#     frame_count = 0
-#     timer.enter(60, 1, calculate_fps, (sc,))
-#
-#
-# timer.enter(60, 1, calculate_fps, (timer, ))
-# timer.run()
 
 
 def pause_game():
@@ -629,12 +593,9 @@ while running:
     frame_count += 1
     end_time = time.time()
     single_frame_rendering_time = end_time - start_time
-    # fps = 1 / render_time
 
     total_time = total_time + single_frame_rendering_time
     if total_time >= 1.0:
         fps = frame_count
         frame_count = 0
         total_time = 0
-    # print("rendering time:", single_frame_rendering_time)
-    # print("FPS:", fps)
