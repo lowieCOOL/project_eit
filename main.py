@@ -190,14 +190,6 @@ def collision_check(object1, object2):
     distance = math.sqrt(math.pow((x2_cm - x1_cm), 2) + math.pow((y2_cm - y1_cm), 2))
     return distance < ((object1.width + object2.width) / 2)
 
-# def collision_check(object1_x, object1_y, object1_diameter, object2_x, object2_y, object2_diameter):
-#     x1_cm = object1_x + object1_diameter / 2
-#     y1_cm = object1_y + object1_diameter / 2
-#     x2_cm = object2_x + object2_diameter / 2
-#     y2_cm = object2_y + object2_diameter / 2
-#     distance = math.sqrt(math.pow((x2_cm - x1_cm), 2) + math.pow((y2_cm - y1_cm), 2))
-#     return distance < ((object1_diameter + object2_diameter) / 2)
-
 
 def level_up():
     global life
