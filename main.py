@@ -8,6 +8,8 @@ import random
 import math
 from pygame import mixer
 import time
+import threading
+import inputHandling
 
 # import sched
 
@@ -20,25 +22,36 @@ running = True
 pause_state = 0
 score = 0
 highest_score = 0
-life = 3
+life = 3000
 kills = 0
 difficulty = 1
 level = 1
 max_kills_to_difficulty_up = 5
 max_difficulty_to_level_up = 5
 initial_player_velocity = 3.0
-initial_enemy_velocity = 1.0
+initial_enemy_velocity = 0.25
 weapon_shot_velocity = 5.0
 single_frame_rendering_time = 0
 total_time = 0
 frame_count = 0
 fps = 0
+measured_bpm = 60        # BPM captured before each level; drives auto-fire rate
+last_bullet_time = 0.0   # timestamp of the last auto-fired bullet
+last_setpoint_time = 0.0  # timestamp of the last setpoint send
+MAX_BULLETS = 5          # max bullets on screen at once
+max_hoogte = 900
+use_measured_position = True
 
 # game objects
 player = type('Player', (), {})()
-bullet = type('Bullet', (), {})()
+bullet = type('Bullet', (), {})()  # template / prototype
+bullets = []  # active bullet pool
 enemies = []
 lasers = []
+dive_bombers = []  # second enemy type: dives straight down
+
+input_thread = threading.Thread(target=inputHandling.init, daemon=True)
+input_thread.start()
 
 # initialize pygame
 pygame.init()
@@ -95,6 +108,7 @@ class Player:
         self.y = y
         self.dx = dx
         self.dy = dy
+        self.setpoint = x
         self.kill_sound_path = kill_sound_path
         self.kill_sound = mixer.Sound(self.kill_sound_path)
 
@@ -163,6 +177,27 @@ class Laser:
             window.blit(self.img, (self.x, self.y))
 
 
+# create dive bomber class — moves straight down, takes a life on contact or reaching the bottom
+class DiveBomber:
+    def __init__(self, img_path, width, height, x, y, dy, kill_sound_path):
+        self.img_path = img_path
+        self.img = pygame.image.load(self.img_path)
+        self.width = width
+        self.height = height
+        self.x = x
+        self.y = y
+        self.dy = dy
+        self.kill_sound_path = kill_sound_path
+        self.kill_sound = mixer.Sound(self.kill_sound_path)
+
+    def draw(self):
+        window.blit(self.img, (self.x, self.y))
+
+    def respawn(self):
+        self.x = random.randint(0, int(WIDTH - self.width))
+        self.y = random.randint(-self.height * 3, -self.height)
+
+
 def scoreboard():
     x_offset = 10
     y_offset = 10
@@ -175,6 +210,8 @@ def scoreboard():
     level_sprint = font.render("LEVEL : " + str(level), True, (255, 255, 255))
     difficulty_sprint = font.render("DIFFICULTY : " + str(difficulty), True, (255, 255, 255))
     life_sprint = font.render("LIFE LEFT : " + str(life) + " | " + ("@ " * life), True, (255, 255, 255))
+    BPM_sprint = font.render("BPM : " + f"{inputHandling.getBPM():.2f}", True, (255, 255, 255))
+    BPMlevel_sprint = font.render("BPM level : " + f"{measured_bpm}", True, (255, 255, 255))
 
     # performance info
     fps_sprint = font.render("FPS : " + str(fps), True, (255, 255, 255))
@@ -187,6 +224,8 @@ def scoreboard():
     window.blit(level_sprint, (x_offset, y_offset + 40))
     window.blit(difficulty_sprint, (x_offset, y_offset + 60))
     window.blit(life_sprint, (x_offset, y_offset + 80))
+    window.blit(BPM_sprint, (x_offset, y_offset + 100))
+    window.blit(BPMlevel_sprint, (x_offset, y_offset + 120))
     window.blit(fps_sprint, (WIDTH - 80, y_offset))
     window.blit(frame_time_sprint, (WIDTH - 80, y_offset + 20))
 
@@ -233,6 +272,8 @@ def level_up():
     if level % 3 == 0:
         player.dx += 1
         bullet.dy += 1
+        for b in bullets:
+            b.dy += 1
         max_difficulty_to_level_up += 1
         for each_laser in lasers:
             each_laser.shoot_probability += 0.1
@@ -247,6 +288,7 @@ def level_up():
     pygame.display.update()
     init_game()
     time.sleep(1.0)
+    measure_heartrate_screen()  # measure BPM before the new level begins
 
 
 def respawn(enemy_obj):
@@ -277,7 +319,7 @@ def kill_enemy(player_obj, bullet_obj, enemy_obj):
 
 
 def rebirth(player_obj):
-    player_obj.x = (WIDTH / 2) - (player_obj.width / 2)
+    # keep horizontal position — only restore vertical position
     player_obj.y = (HEIGHT / 10) * 9 - (player_obj.height / 2)
 
 
@@ -366,6 +408,88 @@ def pause_game():
     mixer.music.pause()
 
 
+def measure_heartrate_screen(duration=10):
+    """Block until a heart-rate measurement is complete.
+
+    Shows a live BPM readout and a countdown.  After *duration* seconds the
+    last stable BPM reading is stored in the global ``measured_bpm``.  The
+    game (and music) are paused for the entire measurement.
+    """
+    global measured_bpm
+
+    mixer.music.pause()
+
+    font_title = pygame.font.SysFont("freesansbold", 42)
+    font_bpm   = pygame.font.SysFont("freesansbold", 64)
+    font_small = pygame.font.SysFont("freesansbold", 24)
+
+    start = time.time()
+
+    while True:
+        elapsed   = time.time() - start
+        remaining = max(0.0, duration - elapsed)
+
+        # keep the pygame event queue alive so the window stays responsive
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit
+
+        # draw measurement screen
+        window.fill((0, 0, 0))
+        window.blit(background_img, (0, 0))
+
+        title_surf = font_title.render("MEASURING HEART RATE", True, (255, 255, 0))
+        window.blit(title_surf, (WIDTH // 2 - title_surf.get_width() // 2, HEIGHT // 2 - 100))
+
+        live_bpm = inputHandling.getBPM()
+        bpm_color = (100, 220, 100) if live_bpm > 0 else (180, 180, 180)
+        bpm_surf = font_bpm.render(f"{live_bpm:.1f} BPM", True, bpm_color)
+        window.blit(bpm_surf, (WIDTH // 2 - bpm_surf.get_width() // 2, HEIGHT // 2 - 30))
+
+        hint = "Keep your finger on the sensor" if live_bpm <= 0 else "Hold still..."
+        hint_surf = font_small.render(hint, True, (200, 200, 200))
+        window.blit(hint_surf, (WIDTH // 2 - hint_surf.get_width() // 2, HEIGHT // 2 + 50))
+
+        countdown_surf = font_small.render(f"Game resumes in: {remaining:.1f} s", True, (255, 255, 255))
+        window.blit(countdown_surf, (WIDTH // 2 - countdown_surf.get_width() // 2, HEIGHT // 2 + 90))
+
+        pygame.display.update()
+
+        if elapsed >= duration:
+            captured = inputHandling.getBPM()
+            measured_bpm = captured if captured > 0 else 60  # fallback to 60 BPM
+            break
+
+    # 3-second get-ready countdown
+    countdown_start = time.time()
+    countdown_duration = 3
+    while True:
+        elapsed = time.time() - countdown_start
+        remaining = max(0.0, countdown_duration - elapsed)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit
+
+        window.fill((0, 0, 0))
+        window.blit(background_img, (0, 0))
+
+        ready_surf = font_title.render("GET READY!", True, (255, 255, 0))
+        window.blit(ready_surf, (WIDTH // 2 - ready_surf.get_width() // 2, HEIGHT // 2 - 60))
+
+        num_surf = font_bpm.render(str(math.ceil(remaining)), True, (255, 255, 255))
+        window.blit(num_surf, (WIDTH // 2 - num_surf.get_width() // 2, HEIGHT // 2 + 10))
+
+        pygame.display.update()
+
+        if elapsed >= countdown_duration:
+            break
+
+    mixer.music.unpause()
+
+
 def init_game():
     global pause_sound
     global level_up_sound
@@ -401,9 +525,15 @@ def init_game():
     bullet_dy = weapon_shot_velocity
     bullet_fire_sound_path = "res/sounds/gunshot.wav"
 
-    global bullet
+    global bullet, bullets
     bullet = Bullet(bullet_img_path, bullet_width, bullet_height, bullet_x, bullet_y, bullet_dx, bullet_dy,
                     bullet_fire_sound_path)
+    bullets.clear()
+    for _ in range(MAX_BULLETS):
+        b = Bullet(bullet_img_path, bullet_width, bullet_height, bullet_x, bullet_y, bullet_dx, bullet_dy,
+                   bullet_fire_sound_path)
+        b.fired = False
+        bullets.append(b)
 
     # enemy (number of enemy = level number)
     enemy_img_path = "res/images/enemy.png"  # 64 x 64 px image
@@ -418,16 +548,18 @@ def init_game():
     laser_width = 24
     laser_height = 24
     laser_dx = 0
-    laser_dy = weapon_shot_velocity
+    laser_dy = weapon_shot_velocity * 0.25
     shoot_probability = 0.3
     relaxation_time = 100
     laser_beam_sound_path = "res/sounds/laser.wav"
 
     global enemies
     global lasers
+    global dive_bombers
 
     enemies.clear()
     lasers.clear()
+    dive_bombers.clear()
 
     for lev in range(level):
         enemy_x = random.randint(0, int(WIDTH - enemy_width))
@@ -443,16 +575,31 @@ def init_game():
                           shoot_probability, relaxation_time, laser_beam_sound_path)
         lasers.append(laser_obj)
 
+    # dive bombers -- twice as many as homing enemies, spawn above screen at random x positions
+    dive_bomber_img_path = "res/images/alien.png"
+    dive_bomber_width = 64
+    dive_bomber_height = 64
+    dive_bomber_dy = initial_enemy_velocity * 1.5
+    dive_bomber_kill_sound_path = "res/sounds/enemykill.wav"
+    for _ in range(level + 1):
+        db_x = random.randint(0, int(WIDTH - dive_bomber_width))
+        db_y = random.randint(-dive_bomber_height * 4, -dive_bomber_height)
+        db = DiveBomber(dive_bomber_img_path, dive_bomber_width, dive_bomber_height,
+                        db_x, db_y, dive_bomber_dy, dive_bomber_kill_sound_path)
+        dive_bombers.append(db)
+
 
 # init game
 init_game()
 init_background_music()
+measure_heartrate_screen()  # measure BPM before level 1 begins
 runned_once = False
 
 # main game loop begins
 while running:
     # start of frame timing
     start_time = time.time()
+    # print("heart rate:", inputHandling.getBPM())
 
     # background
     window.fill((0, 0, 0))
@@ -492,6 +639,8 @@ while running:
                 print("LOG: Escape Key Pressed Down")
                 ESC_KEY_PRESSED = 1
                 pause_state += 1
+            if event.key == pygame.K_t:
+                use_measured_position = not use_measured_position
 
         # Keypress Up Event
         if event.type == pygame.KEYUP:
@@ -520,6 +669,8 @@ while running:
                 print("LOG: Escape Key Released")
                 ESC_KEY_PRESSED = 0
 
+    # LEFT_ARROW_KEY_PRESSED, RIGHT_ARROW_KEY_PRESSED = inputHandling.getPresses()
+
     # check for pause game event
     if pause_state == 2:
         pause_state = 0
@@ -532,19 +683,31 @@ while running:
         continue
     # manipulate game objects based on events and player actions
     # player spaceship movement
-    if RIGHT_ARROW_KEY_PRESSED:
-        player.x += player.dx
-    if LEFT_ARROW_KEY_PRESSED:
-        player.x -= player.dx
-    # bullet firing
-    if (SPACE_BAR_PRESSED or UP_ARROW_KEY_PRESSED) and not bullet.fired:
-        bullet.fired = True
-        bullet.fire_sound.play()
-        bullet.x = player.x + player.width / 2 - bullet.width / 2
-        bullet.y = player.y + bullet.height / 2
+    if RIGHT_ARROW_KEY_PRESSED or inputHandling.getPresses()[1]:
+        player.setpoint += player.dx
+    if LEFT_ARROW_KEY_PRESSED or inputHandling.getPresses()[0]:
+        player.setpoint -= player.dx
+    # bullet firing — automatic, rate driven by measured heart rate
+    # fire_interval is the time (seconds) between shots = 60 / BPM
+    fire_interval = ((60.0 / measured_bpm)/difficulty if measured_bpm > 0 else 1.0)/2
+    # print(fire_interval)
+    current_time = time.time()
+    if (current_time - last_bullet_time) >= fire_interval:
+        inactive = next((b for b in bullets if not b.fired), None)
+        if inactive is not None:
+            inactive.fired = True
+            inactive.fire_sound.play()
+            inactive.x = player.x + player.width / 2 - inactive.width / 2
+            inactive.y = player.y + inactive.height / 2
+            last_bullet_time = current_time
     # bullet movement
-    if bullet.fired:
-        bullet.y -= bullet.dy
+    for b in bullets:
+        if b.fired:
+            b.y -= b.dy
+
+    # dive bomber movement
+    for db in dive_bombers:
+        db.y += db.dy * (1.0 + (difficulty - 1) * 0.15)
 
     # iter through every enemies and lasers
     for i in range(len(enemies)):
@@ -559,17 +722,24 @@ while running:
                     lasers[i].beam_sound.play()
                     lasers[i].x = enemies[i].x + enemies[i].width / 2 - lasers[i].width / 2
                     lasers[i].y = enemies[i].y + lasers[i].height / 2
-        # enemy movement
-        enemies[i].x += enemies[i].dx * float(2 ** (difficulty - 1))
+        # enemy movement — move directly towards the player
+        speed = enemies[i].dx * (1.0 + (difficulty - 1) * 0.15)
+        dir_x = player.x - enemies[i].x
+        dir_y = player.y - enemies[i].y
+        dist = math.sqrt(dir_x ** 2 + dir_y ** 2)
+        if dist > 0:
+            enemies[i].x += speed * dir_x / dist
+            enemies[i].y += speed * dir_y / dist
         # laser movement
         if lasers[i].beamed:
             lasers[i].y += lasers[i].dy
 
     # collision check
     for i in range(len(enemies)):
-        bullet_enemy_collision = collision_check(bullet, enemies[i])
-        if bullet_enemy_collision:
-            kill_enemy(player, bullet, enemies[i])
+        for b in bullets:
+            if b.fired and collision_check(b, enemies[i]):
+                kill_enemy(player, b, enemies[i])
+                break
 
     for i in range(len(lasers)):
         laser_player_collision = collision_check(lasers[i], player)
@@ -579,33 +749,61 @@ while running:
     for i in range(len(enemies)):
         enemy_player_collision = collision_check(enemies[i], player)
         if enemy_player_collision:
-            kill_enemy(player, bullet, enemies[i])
+            kill_enemy(player, bullets[0], enemies[i])
             kill_player(player, enemies[i], lasers[i])
 
     for i in range(len(lasers)):
-        bullet_laser_collision = collision_check(bullet, lasers[i])
-        if bullet_laser_collision:
-            destroy_weapons(player, bullet, enemies[i], lasers[i])
+        for b in bullets:
+            if b.fired and collision_check(b, lasers[i]):
+                destroy_weapons(player, b, enemies[i], lasers[i])
+                break
+
+    # dive bomber collisions
+    for db in dive_bombers:
+        # bullet destroys dive bomber
+        for b in bullets:
+            if b.fired and collision_check(b, db):
+                b.fired = False
+                db.kill_sound.play()
+                db.respawn()
+                break
+        # dive bomber touches player
+        if collision_check(db, player):
+            db.kill_sound.play()
+            db.respawn()
+            life -= 1
+            print("Life Left:", life)
+            if life <= 0:
+                gameover()
+        # dive bomber reaches bottom of screen
+        elif db.y > HEIGHT:
+            db.respawn()
+            life -= 1
+            print("Life Left:", life)
+            if life <= 0:
+                gameover()
 
     # boundary check: 0 <= x <= WIDTH, 0 <= y <= HEIGHT
     # player spaceship
-    if player.x < 0:
-        player.x = 0
-    if player.x > WIDTH - player.width:
-        player.x = WIDTH - player.width
-    # enemy
-    for enemy in enemies:
-        if enemy.x <= 0:
-            enemy.dx = abs(enemy.dx) * 1
-            enemy.y += enemy.dy
-        if enemy.x >= WIDTH - enemy.width:
-            enemy.dx = abs(enemy.dx) * -1
-            enemy.y += enemy.dy
+    if player.setpoint < 0:
+        player.setpoint = 0
+    if player.setpoint > WIDTH - player.width:
+        player.setpoint = WIDTH - player.width
+
+    if use_measured_position:
+        player.x = inputHandling.getHoogte()*(WIDTH-player.width)/max_hoogte
+    else:
+        player.x = player.setpoint
+
+    if current_time - last_setpoint_time >= 0.1:
+        inputHandling.sendSetpoint((player.setpoint + player.width / 2)*max_hoogte/(WIDTH-player.width))
+        last_setpoint_time = current_time
     # bullet
-    if bullet.y < 0:
-        bullet.fired = False
-        bullet.x = player.x + player.width / 2 - bullet.width / 2
-        bullet.y = player.y + bullet.height / 2
+    for b in bullets:
+        if b.y < 0:
+            b.fired = False
+            b.x = player.x + player.width / 2 - b.width / 2
+            b.y = player.y + b.height / 2
     # laser
     for i in range(len(lasers)):
         if lasers[i].y > HEIGHT:
@@ -619,7 +817,10 @@ while running:
         laser.draw()
     for enemy in enemies:
         enemy.draw()
-    bullet.draw()
+    for db in dive_bombers:
+        db.draw()
+    for b in bullets:
+        b.draw()
     player.draw()
 
     # render the display
