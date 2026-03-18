@@ -8,7 +8,7 @@ left_held = False
 right_held = False
 BPM = 0
 hoogte = 0
-port = 'COM7'  # Update this to your actual port
+port = 'COM11'  # Update this to your actual port
 baudrate = 9600
 setpoint = 0
 
@@ -111,9 +111,9 @@ def init(logging=False):
                 laser2_val = int(match2.group(1))
             laser1_pressed, laser2_pressed = False, False
             # print(f"Laser 1: {laser1_val}, Laser 2: {laser2_val}")
-            if laser1_val > 300: # Example threshold for laser 1
+            if laser1_val < 100: # Example threshold for laser 1
                 laser1_pressed = True
-            if laser2_val > 150: # Example threshold for laser 2
+            if laser2_val < 200: # Example threshold for laser 2
                 laser2_pressed = True
             # print(f"Laser 1: {'Pressed' if laser1_pressed else 'Not Pressed'}, Laser 2: {'Pressed' if laser2_pressed else 'Not Pressed'}")
             return laser1_pressed, laser2_pressed
