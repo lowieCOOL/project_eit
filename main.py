@@ -16,6 +16,7 @@ import inputHandling
 # game constants
 WIDTH = 800
 HEIGHT = 600
+BASE_FPS = 60.0
 
 # global variables
 running = True
@@ -39,6 +40,8 @@ measured_bpm = 60        # BPM captured before each level; drives auto-fire rate
 last_bullet_time = 0.0   # timestamp of the last auto-fired bullet
 last_setpoint_time = 0.0  # timestamp of the last setpoint send
 MAX_BULLETS = 5          # max bullets on screen at once
+MAX_ARC_ENEMIES = 6      # max number of arc-flying enemies
+MAX_DIVE_BOMBERS = 4     # max number of vertical enemies
 max_hoogte = 900
 use_measured_position = True
 
@@ -63,9 +66,10 @@ UP_ARROW_KEY_PRESSED = 0
 SPACE_BAR_PRESSED = 0
 ENTER_KEY_PRESSED = 0
 ESC_KEY_PRESSED = 0
+is_fullscreen = True
 
 # create display window
-window = pygame.display.set_mode((WIDTH, HEIGHT))
+window = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
 pygame.display.set_caption("Space Invaders")
 window_icon = pygame.image.load("res/images/alien.png")
 pygame.display.set_icon(window_icon)
@@ -84,6 +88,17 @@ background_music_paths = ["res/sounds/Space_Invaders_Music.ogg",
                           "res/sounds/Space_Invaders_Music_x8.ogg",
                           "res/sounds/Space_Invaders_Music_x16.ogg",
                           "res/sounds/Space_Invaders_Music_x32.ogg"]
+
+
+def toggle_fullscreen():
+    global window
+    global is_fullscreen
+
+    is_fullscreen = not is_fullscreen
+    flags = pygame.FULLSCREEN if is_fullscreen else 0
+    window = pygame.display.set_mode((WIDTH, HEIGHT), flags)
+    pygame.display.set_caption("Space Invaders")
+    pygame.display.set_icon(window_icon)
 
 
 def init_background_music():
@@ -129,9 +144,51 @@ class Enemy:
         self.dy = dy
         self.kill_sound_path = kill_sound_path
         self.kill_sound = mixer.Sound(self.kill_sound_path)
+        self.arc_start_x = x
+        self.arc_start_y = y
+        self.arc_control_x = x
+        self.arc_control_y = y
+        self.arc_end_x = x
+        self.arc_end_y = y
+        self.arc_t = 0.0
+        self.arc_speed = 0.003
+        self.start_new_arc()
 
     def draw(self):
         window.blit(self.img, (self.x, self.y))
+
+    def start_new_arc(self):
+        margin = self.width + random.randint(30, 120)
+        from_left = random.random() < 0.5
+
+        if from_left:
+            self.arc_start_x = -margin
+            self.arc_end_x = WIDTH + margin
+        else:
+            self.arc_start_x = WIDTH + margin
+            self.arc_end_x = -margin
+
+        self.arc_start_y = random.randint(int(HEIGHT * 0.1), int(HEIGHT * 0.45))
+        self.arc_end_y = random.randint(int(HEIGHT * 0.1), int(HEIGHT * 0.45))
+        self.arc_control_x = random.randint(int(WIDTH * 0.2), int(WIDTH * 0.8))
+        self.arc_control_y = random.randint(-self.height * 2, int(HEIGHT * 0.15))
+
+        self.arc_t = 0.0
+        speed_scale = max(0.5, self.dx / initial_enemy_velocity)
+        self.arc_speed = random.uniform(0.0025, 0.0045) * speed_scale
+        self._apply_arc_position()
+
+    def _apply_arc_position(self):
+        u = 1.0 - self.arc_t
+        self.x = (u * u * self.arc_start_x) + (2 * u * self.arc_t * self.arc_control_x) + (self.arc_t * self.arc_t * self.arc_end_x)
+        self.y = (u * u * self.arc_start_y) + (2 * u * self.arc_t * self.arc_control_y) + (self.arc_t * self.arc_t * self.arc_end_y)
+
+    def move_in_arc(self, speed_multiplier, frame_scale):
+        self.arc_t += self.arc_speed * speed_multiplier * frame_scale
+        if self.arc_t >= 1.0:
+            self.start_new_arc()
+            return
+        self._apply_arc_position()
 
 
 # create bullet class
@@ -167,8 +224,8 @@ class Laser:
         self.dy = dy
         self.beamed = False
         self.shoot_probability = shoot_probability
-        self.shoot_timer = 0
-        self.relaxation_time = relaxation_time
+        self.shoot_timer = 0.0
+        self.relaxation_time = relaxation_time / BASE_FPS
         self.beam_sound_path = beam_sound_path
         self.beam_sound = mixer.Sound(self.beam_sound_path)
 
@@ -292,9 +349,7 @@ def level_up():
 
 
 def respawn(enemy_obj):
-    enemy_obj.x = random.randint(0, int(WIDTH - enemy_obj.width))
-    enemy_obj.y = random.randint(int((HEIGHT / 10) * 1 - (enemy_obj.height / 2)),
-                                 int((HEIGHT / 10) * 4 - (enemy_obj.height / 2)))
+    enemy_obj.start_new_arc()
 
 
 def kill_enemy(player_obj, bullet_obj, enemy_obj):
@@ -434,6 +489,9 @@ def measure_heartrate_screen(duration=10):
             if event.type == pygame.QUIT:
                 pygame.quit()
                 raise SystemExit
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pygame.quit()
+                raise SystemExit
 
         # draw measurement screen
         window.fill((0, 0, 0))
@@ -470,6 +528,9 @@ def measure_heartrate_screen(duration=10):
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 pygame.quit()
                 raise SystemExit
 
@@ -535,7 +596,7 @@ def init_game():
         b.fired = False
         bullets.append(b)
 
-    # enemy (number of enemy = level number)
+    # enemy
     enemy_img_path = "res/images/enemy.png"  # 64 x 64 px image
     enemy_width = 64
     enemy_height = 64
@@ -561,7 +622,8 @@ def init_game():
     lasers.clear()
     dive_bombers.clear()
 
-    for lev in range(level):
+    arc_enemy_count = min(level, MAX_ARC_ENEMIES)
+    for _ in range(arc_enemy_count):
         enemy_x = random.randint(0, int(WIDTH - enemy_width))
         enemy_y = random.randint(int((HEIGHT / 10) * 1 - (enemy_height / 2)), int((HEIGHT / 10) * 4 - (enemy_height / 2)))
         laser_x = enemy_x + enemy_width / 2 - laser_width / 2
@@ -575,13 +637,13 @@ def init_game():
                           shoot_probability, relaxation_time, laser_beam_sound_path)
         lasers.append(laser_obj)
 
-    # dive bombers -- twice as many as homing enemies, spawn above screen at random x positions
+    # dive bombers -- keep count capped; scale speed with level instead of spawning more
     dive_bomber_img_path = "res/images/alien.png"
     dive_bomber_width = 64
     dive_bomber_height = 64
-    dive_bomber_dy = initial_enemy_velocity * 1.5
+    dive_bomber_dy = initial_enemy_velocity * 1.5 * (1.0 + (level - 1) * 0.2)
     dive_bomber_kill_sound_path = "res/sounds/enemykill.wav"
-    for _ in range(level + 1):
+    for _ in range(MAX_DIVE_BOMBERS):
         db_x = random.randint(0, int(WIDTH - dive_bomber_width))
         db_y = random.randint(-dive_bomber_height * 4, -dive_bomber_height)
         db = DiveBomber(dive_bomber_img_path, dive_bomber_width, dive_bomber_height,
@@ -594,11 +656,18 @@ init_game()
 init_background_music()
 measure_heartrate_screen()  # measure BPM before level 1 begins
 runned_once = False
+previous_frame_time = time.time()
 
 # main game loop begins
 while running:
     # start of frame timing
     start_time = time.time()
+    raw_delta_time = start_time - previous_frame_time
+    previous_frame_time = start_time
+    # Clamp very large frame gaps so one hitch does not cause huge movement jumps.
+    delta_time = min(max(raw_delta_time, 0.0), 0.1)
+    frame_scale = delta_time * BASE_FPS
+    bullet_frame_scale = max(raw_delta_time, 0.0) * BASE_FPS
     # print("heart rate:", inputHandling.getBPM())
 
     # background
@@ -636,9 +705,12 @@ while running:
                 pause_state += 1
             # Esc Key down
             if event.key == pygame.K_ESCAPE:
-                print("LOG: Escape Key Pressed Down")
-                ESC_KEY_PRESSED = 1
-                pause_state += 1
+                print("LOG: Escape Key Pressed Down - Closing Game")
+                running = False
+            if event.key == pygame.K_F11:
+                print("LOG: F11 Pressed - Toggle Fullscreen")
+                toggle_fullscreen()
+                previous_frame_time = time.time()
             if event.key == pygame.K_t:
                 use_measured_position = not use_measured_position
 
@@ -684,12 +756,12 @@ while running:
     # manipulate game objects based on events and player actions
     # player spaceship movement
     if RIGHT_ARROW_KEY_PRESSED or inputHandling.getPresses()[1]:
-        player.setpoint += player.dx
+        player.setpoint += player.dx * frame_scale
     if LEFT_ARROW_KEY_PRESSED or inputHandling.getPresses()[0]:
-        player.setpoint -= player.dx
+        player.setpoint -= player.dx * frame_scale
     # bullet firing — automatic, rate driven by measured heart rate
     # fire_interval is the time (seconds) between shots = 60 / BPM
-    fire_interval = ((60.0 / measured_bpm)/difficulty if measured_bpm > 0 else 1.0)/2
+    fire_interval = ((60.0 / measured_bpm) if measured_bpm > 0 else 1.0)/2
     # print(fire_interval)
     current_time = time.time()
     if (current_time - last_bullet_time) >= fire_interval:
@@ -703,36 +775,31 @@ while running:
     # bullet movement
     for b in bullets:
         if b.fired:
-            b.y -= b.dy
+            b.y -= b.dy * bullet_frame_scale
 
     # dive bomber movement
     for db in dive_bombers:
-        db.y += db.dy * (1.0 + (difficulty - 1) * 0.15)
+        db.y += db.dy * (1.0 + (difficulty - 1) * 0.15) * frame_scale
 
     # iter through every enemies and lasers
     for i in range(len(enemies)):
         # laser beaming
         if not lasers[i].beamed:
-            lasers[i].shoot_timer += 1
-            if lasers[i].shoot_timer == lasers[i].relaxation_time:
-                lasers[i].shoot_timer = 0
+            lasers[i].shoot_timer += delta_time
+            if lasers[i].shoot_timer >= lasers[i].relaxation_time:
+                lasers[i].shoot_timer = 0.0
                 random_chance = random.randint(0, 100)
                 if random_chance <= (lasers[i].shoot_probability * 100):
                     lasers[i].beamed = True
                     lasers[i].beam_sound.play()
                     lasers[i].x = enemies[i].x + enemies[i].width / 2 - lasers[i].width / 2
                     lasers[i].y = enemies[i].y + lasers[i].height / 2
-        # enemy movement — move directly towards the player
-        speed = enemies[i].dx * (1.0 + (difficulty - 1) * 0.15)
-        dir_x = player.x - enemies[i].x
-        dir_y = player.y - enemies[i].y
-        dist = math.sqrt(dir_x ** 2 + dir_y ** 2)
-        if dist > 0:
-            enemies[i].x += speed * dir_x / dist
-            enemies[i].y += speed * dir_y / dist
+        # enemy movement — fly in a curved arc across the screen and then restart from off-screen
+        speed_multiplier = 1.0 + (difficulty - 1) * 0.15
+        enemies[i].move_in_arc(speed_multiplier, frame_scale)
         # laser movement
         if lasers[i].beamed:
-            lasers[i].y += lasers[i].dy
+            lasers[i].y += lasers[i].dy * frame_scale
 
     # collision check
     for i in range(len(enemies)):
